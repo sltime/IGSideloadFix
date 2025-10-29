@@ -1,4 +1,4 @@
-name: Build IGSideloadFix
+name: Build and Release IGSideloadFix
 
 on:
   workflow_dispatch:
@@ -19,24 +19,10 @@ on:
         required: true
         type: string
       rocket_zip_url:
-        description: "Direct URL of Rocket ZIP (with Rocket.dylib + Rocket.bundle in root)"
+        description: "Direct URL of Rocket zip containing Rocket.dylib + Rocket.bundle"
         default: ""
         required: true
         type: string
-      commit_id:
-        description: "(Optional) Commit ID to build at"
-        default: ""
-        required: false
-        type: string
-      upload_artifact:
-        description: "Upload IPA as artifact"
-        default: true
-        required: false
-        type: boolean
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -45,18 +31,21 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: main
-          ref: ${{ github.event.inputs.commit_id || github.ref }}
-          submodules: recursive
 
-      - name: Install dependencies
-        run: brew install make dpkg ldid wget unzip
-
-      - name: Add GNU Make to PATH
-        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Install Dependencies (if missing)
+        run: |
+          # Install brew packages if missing
+          for pkg in make dpkg ldid wget unzip; do
+            if ! brew list $pkg &>/dev/null; then
+              brew install $pkg
+            fi
+          done
+          # Install cyan if missing
+          if ! python3 -c "import zule_rw" &>/dev/null; then
+            pip3 install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+          fi
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -66,39 +55,40 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: Download decrypted Instagram IPA
+      - name: Generate Hackogram.plist
         run: |
-          wget -O main/Instagram.ipa --content-disposition "${{ inputs.decrypted_ipa_url }}"
-          unzip -q main/Instagram.ipa -d main/tmp
+          if [ ! -f Hackogram.plist ]; then
+            cat <<EOF > Hackogram.plist
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Filter</key>
+    <dict>
+        <key>Bundles</key>
+        <array>
+            <string>com.burbn.instagram</string>
+        </array>
+    </dict>
+</dict>
+</plist>
+EOF
+          fi
 
-      - name: Download Rocket ZIP
-        run: wget -O rocket.zip --content-disposition "${{ inputs.rocket_zip_url }}"
+      - name: Download IPA
+        run: wget "${{ github.event.inputs.decrypted_ipa_url }}" -O Instagram.ipa
 
-      - name: Extract Rocket files
-        run: unzip -q rocket.zip -d rocket_tmp
-
-      - name: Copy Rocket files
+      - name: Download Rocket zip
         run: |
+          wget "${{ github.event.inputs.rocket_zip_url }}" -O rocket.zip
+          unzip rocket.zip -d rocket_tmp
           mkdir -p ./Resources/Rocket.bundle
-          # copy Rocket.dylib to repo root
-          find rocket_tmp -name 'Rocket.dylib' -exec cp {} ./ \;
-          # copy Rocket.bundle contents to Resources
-          find rocket_tmp -name 'Rocket.bundle' -type d -exec cp -R {}/* ./Resources/Rocket.bundle/ \;
+          cp rocket_tmp/Rocket.dylib ./Resources/
+          cp -r rocket_tmp/Rocket.bundle/* ./Resources/Rocket.bundle/
 
-      - name: Build IGSideloadFix
+      - name: Build IPA
         run: |
-          cd main
-          # Set TARGET architectures to arm64 + arm64e
-          sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ inputs.sdk_version }}:${{ inputs.target_version }}/" Makefile
-          echo "ARCHS = arm64 arm64e" >> Makefile
+          sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ github.event.inputs.sdk_version }}:${{ github.event.inputs.target_version }}/" Makefile
           make package FINALPACKAGE=1 CODESIGN_IPA=0
         env:
           THEOS: ${{ github.workspace }}/theos
-
-      - name: Upload IPA artifact
-        if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: IGSideloadFix
-          path: main/packages/*.ipa
-          if-no-files-found: error
