@@ -70,13 +70,9 @@ jobs:
         run: |
           wget -O main/Instagram.ipa --content-disposition "${{ inputs.decrypted_ipa_url }}"
           unzip -q main/Instagram.ipa -d main/tmp
-        env:
-          IPA_URL: ${{ inputs.decrypted_ipa_url }}
 
       - name: Download Rocket ZIP
         run: wget -O rocket.zip --content-disposition "${{ inputs.rocket_zip_url }}"
-        env:
-          ROCKET_ZIP_URL: ${{ inputs.rocket_zip_url }}
 
       - name: Extract Rocket files
         run: unzip -q rocket.zip -d rocket_tmp
@@ -84,8 +80,10 @@ jobs:
       - name: Copy Rocket files
         run: |
           mkdir -p ./Resources/Rocket.bundle
-          cp rocket_tmp/Rocket.dylib ./               # copy dylib to repo root
-          cp -R rocket_tmp/Rocket.bundle/* ./Resources/Rocket.bundle/
+          # copy Rocket.dylib to repo root
+          find rocket_tmp -name 'Rocket.dylib' -exec cp {} ./ \;
+          # copy Rocket.bundle contents to Resources
+          find rocket_tmp -name 'Rocket.bundle' -type d -exec cp -R {}/* ./Resources/Rocket.bundle/ \;
 
       - name: Build IGSideloadFix
         run: |
