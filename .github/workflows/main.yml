@@ -34,6 +34,10 @@ jobs:
         run: |
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
+      - name: Add LLVM to PATH
+        run: |
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
       - name: Download Theos
         uses: actions/checkout@v4
         with:
@@ -75,6 +79,20 @@ jobs:
           # Patch +[RABuildManager installType] to mov x0, #1; ret
           llvm-objcopy --update-section .text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
           mv Rocket_patched.dylib Rocket.dylib
+
+      - name: Extract Rocket.bundle resources
+        run: |
+          # Look for Rocket.bundle inside the extracted deb
+          BUNDLE_PATH=$(find rocket_tmp -type d -name "Rocket.bundle" | head -n1)
+          if [ -z "$BUNDLE_PATH" ]; then
+              echo "Error: Rocket.bundle not found in the .deb"
+              exit 1
+          fi
+
+          # Copy bundle contents into Resources/
+          mkdir -p Resources
+          cp -R "$BUNDLE_PATH/" Resources/
+          echo "Rocket.bundle resources copied to Resources/"
 
       - name: Configure Makefile
         run: |
