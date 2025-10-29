@@ -2,6 +2,13 @@ name: Build IGSideloadFix with Rocket
 
 on:
   workflow_dispatch:
+    inputs:
+      instagram_ipa_url:
+        description: 'URL to your decrypted Instagram IPA'
+        required: true
+      rocket_deb_url:
+        description: 'URL to Rocket .deb'
+        required: true
 
 jobs:
   build:
@@ -13,40 +20,36 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install make ldid dpkg llvm
+          brew install make ldid dpkg llvm unzip
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           git clone https://github.com/kabiroberai/theos-jailed.git $HOME/theos-jailed
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "THEOS_JAILED=$HOME/theos-jailed" >> $GITHUB_ENV
 
-      - name: Add Instagram IPA
+      - name: Download Instagram IPA
         run: |
-          echo "$IPA_BASE64" | base64 --decode > Instagram.ipa
-        env:
-          IPA_BASE64: ${{ secrets.INSTAGRAM_IPA_BASE64 }}
+          curl -L ${{ github.event.inputs.instagram_ipa_url }} -o Instagram.ipa
 
-      - name: Add Rocket dylib
+      - name: Download and extract Rocket dylib from .deb
         run: |
-          # Decode base64 Rocket.dylib from secret
-          echo "$ROCKET_DYLIB_BASE64" | base64 --decode > Rocket.dylib
+          curl -L ${{ github.event.inputs.rocket_deb_url }} -o rocket.deb
+          ar x rocket.deb data.tar.lzma || ar x rocket.deb data.tar.xz || ar x rocket.deb data.tar.gz
+          tar --lzma -xf data.tar.lzma || tar -xf data.tar.xz || tar -xf data.tar.gz
+          cp ./usr/lib/Rocket.dylib Rocket.dylib
 
-          # Patch RABuildManager installType (mov x0, #1; ret)
-          # Requires llvm-objcopy
+      - name: Patch Rocket dylib
+        run: |
+          # Patch +[RABuildManager installType] to mov x0, #1; ret
           llvm-objcopy --update-section .text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
-
-          # Replace the original dylib with patched one
           mv Rocket_patched.dylib Rocket.dylib
-        env:
-          ROCKET_DYLIB_BASE64: ${{ secrets.ROCKET_DYLIB_BASE64 }}
 
       - name: Configure Makefile
         run: |
-          # Ensure Makefile injects Rocket
           sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
 
       - name: Build patched IPA
         run: |
-          make package FINALPACKAGE=1 TROLLSTORE=1 FAKESIGN_IPA=1
+          make package FINALPACKAGE=1 CODESIGN_IPA=0
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
