@@ -42,10 +42,9 @@ jobs:
       - name: Download and extract Rocket dylib
         run: |
           wget "${{ github.event.inputs.rocket_deb_url }}" --no-verbose -O rocket.deb
-          ar x rocket.deb data.tar.lzma 2>/dev/null || ar x rocket.deb data.tar.xz 2>/dev/null || ar x rocket.deb data.tar.gz 2>/dev/null
-          DATA_TAR=$(ls data.tar.*)
+          ar x rocket.deb data.tar.* || true
           mkdir -p rocket_tmp
-          tar -xf "$DATA_TAR" -C rocket_tmp
+          tar -xf data.tar.* -C rocket_tmp
           ROCKET_PATH=$(find rocket_tmp -type f -name "Rocket.dylib" | head -n1)
           if [ -z "$ROCKET_PATH" ]; then
               echo "Error: Rocket.dylib not found in the .deb"
@@ -67,16 +66,17 @@ jobs:
           fi
           mkdir -p Resources
           cp -R "$BUNDLE_PATH/" Resources/
-          echo "Rocket.bundle resources copied to Resources/"
 
-      - name: Configure Makefile for arm64/arm64e
+      - name: Force arm64/arm64e and clean previous builds
         run: |
-          sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
+          # Update Makefile
           sed -i '' 's/^ARCHS.*/ARCHS = arm64 arm64e/' Makefile
           sed -i '' 's/^TARGET.*/TARGET = iphone:clang:16.5:15.0/' Makefile
+          sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
 
-      - name: Clean previous builds
-        run: make clean
+          # Clean old builds
+          make clean
+          rm -rf .theos/obj/armv7
         env:
           THEOS: ${{ github.workspace }}/theos
 
