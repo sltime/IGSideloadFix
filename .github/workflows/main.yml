@@ -1,0 +1,55 @@
+name: Build IGSideloadFix with Rocket
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install make ldid dpkg llvm
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          git clone https://github.com/kabiroberai/theos-jailed.git $HOME/theos-jailed
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "THEOS_JAILED=$HOME/theos-jailed" >> $GITHUB_ENV
+
+      - name: Add Instagram IPA
+        run: |
+          echo "$IPA_BASE64" | base64 --decode > Instagram.ipa
+        env:
+          IPA_BASE64: ${{ secrets.INSTAGRAM_IPA_BASE64 }}
+
+      - name: Add Rocket dylib
+        run: |
+          # Decode base64 Rocket.dylib from secret
+          echo "$ROCKET_DYLIB_BASE64" | base64 --decode > Rocket.dylib
+
+          # Patch RABuildManager installType (mov x0, #1; ret)
+          # Requires llvm-objcopy
+          llvm-objcopy --update-section .text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
+
+          # Replace the original dylib with patched one
+          mv Rocket_patched.dylib Rocket.dylib
+        env:
+          ROCKET_DYLIB_BASE64: ${{ secrets.ROCKET_DYLIB_BASE64 }}
+
+      - name: Configure Makefile
+        run: |
+          # Ensure Makefile injects Rocket
+          sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
+
+      - name: Build patched IPA
+        run: |
+          make package FINALPACKAGE=1 TROLLSTORE=1 FAKESIGN_IPA=1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IGSideloadFix-IPA
+          path: packages/*.ipa
