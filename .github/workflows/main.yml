@@ -20,7 +20,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Install missing packages only
           for pkg in make ldid dpkg llvm unzip wget; do
             if ! command -v $pkg >/dev/null 2>&1; then
               echo "Installing $pkg..."
@@ -31,12 +30,10 @@ jobs:
           done
 
       - name: Add GNU Make to PATH
-        run: |
-          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
       - name: Add LLVM to PATH
-        run: |
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+        run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -55,18 +52,11 @@ jobs:
 
       - name: Download and extract Rocket dylib
         run: |
-          # Download Dropbox .deb raw file
           wget "${{ github.event.inputs.rocket_deb_url }}" --no-verbose -O rocket.deb
-
-          # Extract .deb data archive (supports lzma/xz/gz)
           ar x rocket.deb data.tar.lzma 2>/dev/null || ar x rocket.deb data.tar.xz 2>/dev/null || ar x rocket.deb data.tar.gz 2>/dev/null
           DATA_TAR=$(ls data.tar.*)
-
-          # Extract tar to temporary folder
           mkdir -p rocket_tmp
           tar -xf "$DATA_TAR" -C rocket_tmp
-
-          # Dynamically find Rocket.dylib
           ROCKET_PATH=$(find rocket_tmp -type f -name "Rocket.dylib" | head -n1)
           if [ -z "$ROCKET_PATH" ]; then
               echo "Error: Rocket.dylib not found in the .deb"
@@ -76,20 +66,16 @@ jobs:
 
       - name: Patch Rocket dylib
         run: |
-          # Patch +[RABuildManager installType] to mov x0, #1; ret
           llvm-objcopy --update-section __TEXT,__text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
           mv Rocket_patched.dylib Rocket.dylib
 
       - name: Extract Rocket.bundle resources
         run: |
-          # Look for Rocket.bundle inside the extracted deb
           BUNDLE_PATH=$(find rocket_tmp -type d -name "Rocket.bundle" | head -n1)
           if [ -z "$BUNDLE_PATH" ]; then
               echo "Error: Rocket.bundle not found in the .deb"
               exit 1
           fi
-
-          # Copy bundle contents into Resources/
           mkdir -p Resources
           cp -R "$BUNDLE_PATH/" Resources/
           echo "Rocket.bundle resources copied to Resources/"
@@ -97,6 +83,9 @@ jobs:
       - name: Configure Makefile
         run: |
           sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
+          # Set target and architectures for arm64 + arm64e
+          sed -i '' 's/^ARCHS.*/ARCHS = arm64 arm64e/' Makefile
+          sed -i '' 's/^TARGET.*/TARGET = iphone:clang:16.5:15.0/' Makefile
 
       - name: Build patched IPA
         run: make package FINALPACKAGE=1 CODESIGN_IPA=0
