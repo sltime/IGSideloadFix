@@ -7,7 +7,7 @@ on:
         description: "Direct URL of the decrypted Instagram IPA"
         required: true
       rocket_deb_url:
-        description: "Direct URL of Rocket .deb"
+        description: "Direct Dropbox URL of Rocket .deb (use dl=1)"
         required: true
 
 jobs:
@@ -38,19 +38,28 @@ jobs:
         run: |
           wget "${{ github.event.inputs.decrypted_ipa_url }}" --no-verbose -O Instagram.ipa
           unzip -q Instagram.ipa -d tmp_ipa
-          # Optional: extract Instagram version
           IG_VERSION=$(grep -A 1 '<key>CFBundleShortVersionString</key>' tmp_ipa/Payload/Instagram.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')
           echo "IG_VERSION=${IG_VERSION}" >> "$GITHUB_ENV"
 
       - name: Download and extract Rocket dylib
         run: |
+          # Download Rocket .deb from Dropbox (must use dl=1)
           wget "${{ github.event.inputs.rocket_deb_url }}" --no-verbose -O rocket.deb
-          ar x rocket.deb data.tar.lzma || ar x rocket.deb data.tar.xz || ar x rocket.deb data.tar.gz
-          tar --lzma -xf data.tar.lzma 2>/dev/null || tar -xf data.tar.xz 2>/dev/null || tar -xf data.tar.gz 2>/dev/null
-          cp ./usr/lib/Rocket.dylib Rocket.dylib
+
+          # Extract .deb data archive (supports lzma/xz/gz)
+          ar x rocket.deb data.tar.lzma 2>/dev/null || ar x rocket.deb data.tar.xz 2>/dev/null || ar x rocket.deb data.tar.gz 2>/dev/null
+          DATA_TAR=$(ls data.tar.*)
+
+          # Extract tar to temporary folder
+          mkdir -p rocket_tmp
+          tar -xf "$DATA_TAR" -C rocket_tmp
+
+          # Copy Rocket.dylib to repo root
+          cp rocket_tmp/usr/lib/Rocket.dylib Rocket.dylib
 
       - name: Patch Rocket dylib
         run: |
+          # Patch +[RABuildManager installType] to mov x0, #1; ret
           llvm-objcopy --update-section .text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
           mv Rocket_patched.dylib Rocket.dylib
 
