@@ -1,4 +1,4 @@
-name: Build and Release IGSideloadFix
+name: Build IGSideloadFix
 
 on:
   workflow_dispatch:
@@ -7,22 +7,26 @@ on:
         description: "iOS SDK Version"
         default: "16.5"
         required: true
-        type: string
       target_version:
         description: "Target iOS Version"
         default: "15.0"
         required: true
-        type: string
       decrypted_ipa_url:
         description: "Direct URL of the decrypted Instagram IPA"
         default: ""
         required: true
-        type: string
       rocket_zip_url:
-        description: "Direct URL of Rocket zip containing Rocket.dylib + Rocket.bundle"
+        description: "Direct URL of Rocket zip (with Rocket.dylib + Rocket.bundle)"
         default: ""
         required: true
-        type: string
+      upload_artifact:
+        description: "Upload IPA as artifact"
+        default: false
+        required: false
+      create_release:
+        description: "Create a draft release"
+        default: true
+        required: false
 
 jobs:
   build:
@@ -31,21 +35,16 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (if missing)
+      - name: Install dependencies (skip if already installed)
         run: |
-          # Install brew packages if missing
-          for pkg in make dpkg ldid wget unzip; do
-            if ! brew list $pkg &>/dev/null; then
-              brew install $pkg
-            fi
-          done
-          # Install cyan if missing
-          if ! python3 -c "import zule_rw" &>/dev/null; then
-            pip3 install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
-          fi
+          command -v make >/dev/null || brew install make
+          command -v dpkg >/dev/null || brew install dpkg
+          command -v ldid >/dev/null || brew install ldid
+          command -v wget >/dev/null || brew install wget
+          command -v unzip >/dev/null || brew install unzip
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -55,40 +54,68 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: Generate Hackogram.plist
-        run: |
-          if [ ! -f Hackogram.plist ]; then
-            cat <<EOF > Hackogram.plist
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Filter</key>
-    <dict>
-        <key>Bundles</key>
-        <array>
-            <string>com.burbn.instagram</string>
-        </array>
-    </dict>
-</dict>
-</plist>
-EOF
-          fi
+      - name: iOS SDK caching
+        id: sdk_cache
+        uses: actions/cache@v4
+        with:
+          path: theos/sdks/
+          key: ios-sdk-${{ inputs.sdk_version }}
 
-      - name: Download IPA
-        run: wget "${{ github.event.inputs.decrypted_ipa_url }}" -O Instagram.ipa
+      - name: Download iOS SDK
+        if: steps.sdk_cache.outputs.cache-hit != 'true'
+        run: |
+          git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
+          git checkout
+          mv ./*.sdk "${THEOS}/sdks"
+        env:
+          THEOS: ${{ github.workspace }}/theos
+
+      - name: Download Instagram IPA
+        run: |
+          wget "${{ inputs.decrypted_ipa_url }}" -O Instagram.ipa
+
+      - name: Extract Instagram version
+        run: |
+          unzip -q Instagram.ipa -d tmp_ipa
+          IG_VERSION=$(plutil -extract CFBundleShortVersionString raw tmp_ipa/Payload/Instagram.app/Info.plist)
+          echo "IG_VERSION=$IG_VERSION" >> $GITHUB_ENV
 
       - name: Download Rocket zip
         run: |
-          wget "${{ github.event.inputs.rocket_zip_url }}" -O rocket.zip
-          unzip rocket.zip -d rocket_tmp
+          wget "${{ inputs.rocket_zip_url }}" -O rocket.zip
+          unzip -q rocket.zip -d rocket_tmp
           mkdir -p ./Resources/Rocket.bundle
           cp rocket_tmp/Rocket.dylib ./Resources/
           cp -r rocket_tmp/Rocket.bundle/* ./Resources/Rocket.bundle/
 
-      - name: Build IPA
+      - name: Build IGSideloadFix
         run: |
-          sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ github.event.inputs.sdk_version }}:${{ github.event.inputs.target_version }}/" Makefile
+          sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ inputs.sdk_version }}:${{ inputs.target_version }}/" Makefile
           make package FINALPACKAGE=1 CODESIGN_IPA=0
         env:
           THEOS: ${{ github.workspace }}/theos
+          IG_VERSION: ${{ env.IG_VERSION }}
+
+      - name: Rename IPA with version
+        run: |
+          mv ./packages/*.ipa ./packages/Instagram_sideloaded_${IG_VERSION}.ipa
+
+      - name: Upload artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Instagram_sideloaded_${{ env.IG_VERSION }}
+          path: ./packages/Instagram_sideloaded_${{ env.IG_VERSION }}.ipa
+
+      - name: Create draft release
+        if: ${{ inputs.create_release }}
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.IG_VERSION }}
+          name: Instagram Sideloaded v${{ env.IG_VERSION }}
+          files: ./packages/Instagram_sideloaded_${{ env.IG_VERSION }}.ipa
+          draft: true
