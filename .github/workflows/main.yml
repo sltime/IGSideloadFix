@@ -77,7 +77,7 @@ jobs:
       - name: Patch Rocket dylib
         run: |
           # Patch +[RABuildManager installType] to mov x0, #1; ret
-          llvm-objcopy --update-section .text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
+          llvm-objcopy --update-section __TEXT,__text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
           mv Rocket_patched.dylib Rocket.dylib
 
       - name: Extract Rocket.bundle resources
