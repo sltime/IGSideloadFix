@@ -3,11 +3,11 @@ name: Build IGSideloadFix with Rocket
 on:
   workflow_dispatch:
     inputs:
-      instagram_ipa_url:
-        description: 'URL to your decrypted Instagram IPA'
+      decrypted_ipa_url:
+        description: "Direct URL of the decrypted Instagram IPA"
         required: true
       rocket_deb_url:
-        description: 'URL to Rocket .deb'
+        description: "Direct URL of Rocket .deb"
         required: true
 
 jobs:
@@ -20,26 +20,37 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install make ldid dpkg llvm unzip
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          git clone https://github.com/kabiroberai/theos-jailed.git $HOME/theos-jailed
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "THEOS_JAILED=$HOME/theos-jailed" >> $GITHUB_ENV
+          brew install make ldid dpkg llvm unzip wget
+
+      - name: Add GNU Make to PATH
+        run: |
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Download Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          ref: master
+          path: theos
+          submodules: recursive
 
       - name: Download Instagram IPA
         run: |
-          curl -L ${{ github.event.inputs.instagram_ipa_url }} -o Instagram.ipa
+          wget "${{ github.event.inputs.decrypted_ipa_url }}" --no-verbose -O Instagram.ipa
+          unzip -q Instagram.ipa -d tmp_ipa
+          # Optional: extract Instagram version
+          IG_VERSION=$(grep -A 1 '<key>CFBundleShortVersionString</key>' tmp_ipa/Payload/Instagram.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')
+          echo "IG_VERSION=${IG_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Download and extract Rocket dylib from .deb
+      - name: Download and extract Rocket dylib
         run: |
-          curl -L ${{ github.event.inputs.rocket_deb_url }} -o rocket.deb
+          wget "${{ github.event.inputs.rocket_deb_url }}" --no-verbose -O rocket.deb
           ar x rocket.deb data.tar.lzma || ar x rocket.deb data.tar.xz || ar x rocket.deb data.tar.gz
-          tar --lzma -xf data.tar.lzma || tar -xf data.tar.xz || tar -xf data.tar.gz
+          tar --lzma -xf data.tar.lzma 2>/dev/null || tar -xf data.tar.xz 2>/dev/null || tar -xf data.tar.gz 2>/dev/null
           cp ./usr/lib/Rocket.dylib Rocket.dylib
 
       - name: Patch Rocket dylib
         run: |
-          # Patch +[RABuildManager installType] to mov x0, #1; ret
           llvm-objcopy --update-section .text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
           mv Rocket_patched.dylib Rocket.dylib
 
@@ -51,8 +62,8 @@ jobs:
         run: |
           make package FINALPACKAGE=1 CODESIGN_IPA=0
 
-      - name: Upload artifact
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: IGSideloadFix-IPA
+          name: IGSideloadFix-Instagram-${{ env.IG_VERSION }}
           path: packages/*.ipa
