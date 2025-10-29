@@ -99,8 +99,9 @@ jobs:
           sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
 
       - name: Build patched IPA
-        run: |
-          make package FINALPACKAGE=1 CODESIGN_IPA=0
+        run: make package FINALPACKAGE=1 CODESIGN_IPA=0
+        env:
+          THEOS: ${{ github.workspace }}/theos
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
