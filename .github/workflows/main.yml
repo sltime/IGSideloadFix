@@ -18,9 +18,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          brew install make ldid dpkg llvm unzip wget
+          # Install missing packages only
+          for pkg in make ldid dpkg llvm unzip wget; do
+            if ! command -v $pkg >/dev/null 2>&1; then
+              echo "Installing $pkg..."
+              brew install $pkg
+            else
+              echo "$pkg is already installed, skipping."
+            fi
+          done
 
       - name: Add GNU Make to PATH
         run: |
@@ -43,7 +51,7 @@ jobs:
 
       - name: Download and extract Rocket dylib
         run: |
-          # Download Rocket .deb from Dropbox (must use dl=1)
+          # Download Dropbox .deb raw file
           wget "${{ github.event.inputs.rocket_deb_url }}" --no-verbose -O rocket.deb
 
           # Extract .deb data archive (supports lzma/xz/gz)
@@ -54,8 +62,13 @@ jobs:
           mkdir -p rocket_tmp
           tar -xf "$DATA_TAR" -C rocket_tmp
 
-          # Copy Rocket.dylib to repo root
-          cp rocket_tmp/usr/lib/Rocket.dylib Rocket.dylib
+          # Dynamically find Rocket.dylib
+          ROCKET_PATH=$(find rocket_tmp -type f -name "Rocket.dylib" | head -n1)
+          if [ -z "$ROCKET_PATH" ]; then
+              echo "Error: Rocket.dylib not found in the .deb"
+              exit 1
+          fi
+          cp "$ROCKET_PATH" Rocket.dylib
 
       - name: Patch Rocket dylib
         run: |
