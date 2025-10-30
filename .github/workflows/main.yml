@@ -208,16 +208,14 @@ jobs:
       - name: Rename IPA
         shell: bash
         run: |
-          # Find the IPA inside packages/Hackogram/ (tweak package layout)
-          IPA=$(find packages/Hackogram -name "*.ipa" | head -n1)
-          [ -z "$IPA" ] && { echo "Error: IPA not found in packages/Hackogram/!"; exit 1; }
+          # The tweak package puts the IPA in packages/ with the full package name
+          IPA=$(find packages -name "*.ipa" -type f | head -n1)
+          [ -z "$IPA" ] && { echo "Error: No .ipa found in packages/!"; exit 1; }
 
-          # Build suffix for unsigned builds
+          # Unsigned suffix
           SUFFIX=$( [ "${{ inputs.sign_ipa }}" = "false" ] && echo "-unsigned" || echo "" )
 
-          # Final filename
           NEW_NAME="IGSideloadFix-Instagram-${{ env.IG_VERSION }}$SUFFIX.ipa"
-
           mv "$IPA" "$NEW_NAME"
           echo "Built: $NEW_NAME"
 
