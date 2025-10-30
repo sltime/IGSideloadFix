@@ -1,4 +1,4 @@
-name: Build IGSideloadFix with Rocket (ZIP)
+name: Build IGSideloadFix (Sideload / Unsigned)
 
 on:
   workflow_dispatch:
@@ -7,35 +7,35 @@ on:
         description: "Direct URL of the decrypted Instagram IPA"
         required: true
       rocket_zip_url:
-        description: "Direct URL of Rocket.zip (must extract to Rocket/ folder)"
+        description: "Direct URL of Rocket.zip → extracts to Rocket/Rocket.dylib + Rocket.bundle"
         required: true
+      sign_ipa:
+        description: "Sign the IPA? (uncheck for unsigned)"
+        type: boolean
+        default: true
 
 jobs:
   build:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     env:
       THEOS: ${{ github.workspace }}/theos
+      THEOS_JAILED: ${{ github.workspace }}/theos-jailed
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Xcode (latest stable)
-        run: |
-          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
-          xcodebuild -version
+      - name: Set Xcode 16.1
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
 
-      - name: Install Homebrew dependencies
+      - name: Install dependencies
         run: |
           brew update
-          for pkg in make ldid dpkg llvm unzip wget xz plutil; do
-            if ! command -v $pkg >/dev/null 2>&1; then
-              echo "Installing $pkg..."
+          for pkg in make ldid llvm unzip wget plutil git; do
+            if ! command -v $pkg >/dev/null; then
               brew install $pkg
-            else
-              echo "$pkg already installed."
             fi
           done
 
@@ -45,53 +45,50 @@ jobs:
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
       - name: Clone Theos
-        run: |
-          git clone --depth 1 https://github.com/theos/theos.git "$THEOS"
-          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+        run: git clone --depth 1 https://github.com/theos/theos.git "$THEOS"
 
-      - name: Download Instagram IPA
+      - name: Clone theos-jailed (your fork)
+        run: |
+          # Replace with your fork if you have a PR
+          git clone --depth 1 https://github.com/kabiroberai/theos-jailed.git "$THEOS_JAILED"
+
+      - name: Download & extract Instagram IPA
         run: |
           wget "${{ inputs.decrypted_ipa_url }}" --no-verbose -O Instagram.ipa
           unzip -q Instagram.ipa -d tmp_ipa
           IG_VERSION=$(plutil -extract CFBundleShortVersionString raw tmp_ipa/Payload/Instagram.app/Info.plist)
           echo "IG_VERSION=$IG_VERSION" >> "$GITHUB_ENV"
-          echo "Instagram version: $IG_VERSION"
+          echo "Instagram v$IG_VERSION"
 
-      - name: Download and Extract Rocket.zip
+      - name: Download & extract Rocket.zip
         run: |
           wget "${{ inputs.rocket_zip_url }}" --no-verbose -O Rocket.zip
           unzip -q Rocket.zip -d .
-          
-          # Verify expected structure
           if [ ! -f "Rocket/Rocket.dylib" ]; then
-            echo "Error: Rocket/Rocket.dylib not found after extraction!"
+            echo "Error: Rocket/Rocket.dylib not found!"
             exit 1
           fi
-          
-          if [ ! -d "Rocket/Rocket.bundle" ]; then
-            echo "Warning: Rocket/Rocket.bundle not found – proceeding without it."
-          fi
+          cp Rocket/Rocket.dylib .
+          [ -d Rocket/Rocket.bundle ] && mkdir -p Resources && cp -R Rocket/Rocket.bundle Resources/ || echo "No bundle"
 
-          cp "Rocket/Rocket.dylib" Rocket.dylib
-          [ -d "Rocket/Rocket.bundle" ] && cp -R "Rocket/Rocket.bundle" Resources/ || echo "No bundle to copy"
-
-      - name: Patch Rocket.dylib (Bypass Instagram Anti-Tamper)
+      - name: Patch Rocket.dylib → mov x0, #1 ; ret
         run: |
-          # Known offset for recent Rocket versions (0x5E30) – replace bl with nop+ret
-          printf '\x1F\x20\x03\xD5\xC0\x03\x5F\xD6' | \
-            dd of=Rocket.dylib bs=1 seek=$((0x5E30)) conv=notrunc 2>/dev/null || true
-          echo "Rocket.dylib patched at offset 0x5E30"
+          printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6' | \
+            dd of=Rocket.dylib bs=1 seek=$((0x5E30)) conv=notrunc 2>/dev/null
+          echo "Patched Rocket.dylib at 0x5E30"
 
-      - name: Prepare Theos Staging Layout
+      - name: Prepare Theos layout
         run: |
           mkdir -p layout/Applications/Instagram.app/Frameworks
+          cp -R tmp_ipa/Payload/Instagram.app/* layout/Applications/Instagram.app/
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
 
-      - name: Generate Makefile (Theos)
+      - name: Generate Makefile (theos-jailed)
         run: |
           cat > Makefile << 'EOF'
           include $(THEOS)/makefiles/common.mk
+          include $(THEOS_JAILED)/theos.mk
 
           APPLICATION_NAME = Instagram
           Instagram_FILES = $(wildcard layout/Applications/Instagram.app/*.plist)
@@ -103,38 +100,41 @@ jobs:
           Instagram_INSTALL_PATH = /Applications
           Instagram_IPA = Instagram.ipa
 
+          # --- INJECT DYLIB ---
+          Hackogram_INJECT_DYLIBS = Rocket.dylib
+          # -------------------
+
           include $(THEOS_MAKE_PATH)/aggregate.mk
           include $(THEOS_MAKE_PATH)/application.mk
 
           after-stage::
-              # Inject dylib into binary
               $(ECHO_NOTHING)install_name_tool -change \
                 @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
                 $(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
-              
-              # Re-sign binary (no entitlements needed for sideload)
               $(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
 
           FINALPACKAGE = 1
           EOF
 
-      - name: Build Patched IPA
-        run: |
-          make package FINALPACKAGE=1
+      - name: Build IPA
         env:
-          THEOS_PACKAGE_SCHEME: rootless   # Change to 'rootful' if needed
-          THEOS_PLATFORM_DEB_COMPRESSION: none
-
-      - name: Rename & Upload Artifact
+          CODESIGN_IPA: ${{ inputs.sign_ipa == false && '0' || '' }}
         run: |
-          IPA_FILE=$(find packages -name "*.ipa" | head -n1)
-          NEW_NAME="IGSideloadFix-Instagram-${{ env.IG_VERSION }}.ipa"
-          mv "$IPA_FILE" "$NEW_NAME"
-          echo "Built IPA: $NEW_NAME"
+          echo "Building IPA (sign_ipa=${{ inputs.sign_ipa }})"
+          make package FINALPACKAGE=1 \
+            ${{ inputs.sign_ipa == false && 'CODESIGN_IPA=0' || '' }}
 
-      - name: Upload IPA Artifact
+      - name: Rename & Upload
+        run: |
+          IPA=$(find packages -name "*.ipa" | head -n1)
+          SUFFIX=$( [ "${{ inputs.sign_ipa }}" = "false" ] && echo "-unsigned" || echo "" )
+          NEW_NAME="IGSideloadFix-Instagram-${{ env.IG_VERSION }}$SUFFIX.ipa"
+          mv "$IPA" "$NEW_NAME"
+          echo "Built: $NEW_NAME"
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: IGSideloadFix-Instagram-${{ env.IG_VERSION }}
-          path: IGSideloadFix-Instagram-${{ env.IG_VERSION }}.ipa
+          name: IGSideloadFix-Instagram-${{ env.IG_VERSION }}${{ inputs.sign_ipa == false && '-unsigned' || '' }}
+          path: IGSideloadFix-Instagram-${{ env.IG_VERSION }}${{ inputs.sign_ipa == false && '-unsigned' || '' }}.ipa
           retention-days: 7
