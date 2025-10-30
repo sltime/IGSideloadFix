@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           brew update
-          for pkg in make ldid llvm unzip wget plutil git; do
+          for pkg in make ldid llvm unzip wget plutil git perl; do
             if ! command -v $pkg >/dev/null; then
               brew install $pkg
             fi
@@ -49,17 +49,9 @@ jobs:
       - name: Clone Theos
         run: git clone --depth 1 https://github.com/theos/theos.git "$THEOS"
 
-      # ------------------- THEOS-JAILED (only for jailed tweaks) -------------------
+      # ------------------- THEOS-JAILED -------------------
       - name: Clone theos-jailed
-        run: |
-          git clone --depth 1 https://github.com/kabiroberai/theos-jailed.git "$THEOS_JAILED"
-
-      # ------------------- Copy theos.mk from Theos (guaranteed to exist) -------------------
-      - name: Ensure theos.mk exists
-        run: |
-          cp "$THEOS/makefiles/common.mk" "$THEOS_JAILED/theos.mk" || true
-          # If theos-jailed already has it, overwrite is fine
-          echo "theos.mk placed at $THEOS_JAILED/theos.mk"
+        run: git clone --depth 1 https://github.com/kabiroberai/theos-jailed.git "$THEOS_JAILED"
 
       # ------------------- Instagram IPA -------------------
       - name: Download & extract Instagram IPA
@@ -98,11 +90,11 @@ jobs:
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
 
-      # ------------------- Generate Makefile with REAL TABS -------------------
-      - name: Generate Makefile (with real tabs)
+      # ------------------- Generate Makefile (theos-jailed ONLY) -------------------
+      - name: Generate Makefile (theos-jailed only)
         run: |
           cat > Makefile <<'EOF'
-          include $(THEOS)/makefiles/common.mk
+          # Only include theos-jailed's theos.mk — it handles common.mk internally
           include $(THEOS_JAILED)/theos.mk
 
           APPLICATION_NAME = Instagram
@@ -115,18 +107,25 @@ jobs:
           Instagram_INSTALL_PATH = /Applications
           Instagram_IPA = Instagram.ipa
 
+          # Inject Rocket.dylib
           Hackogram_INJECT_DYLIBS = Rocket.dylib
 
+          # Standard Theos rules
           include $(THEOS_MAKE_PATH)/aggregate.mk
           include $(THEOS_MAKE_PATH)/application.mk
+
+          # Fix load path + re-sign binary
+          after-stage::
+              $(ECHO_NOTHING)install_name_tool -change \
+                @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
+                $(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+              $(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+
+          FINALPACKAGE = 1
           EOF
 
-          # Append after-stage:: with real tabs
-          printf 'after-stage::\n' >> Makefile
-          printf '\t$(ECHO_NOTHING)install_name_tool -change @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib $(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)\n' >> Makefile
-          printf '\t$(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)\n' >> Makefile
-          printf '\nFINALPACKAGE = 1\n' >> Makefile
-
+          # Replace leading spaces with real tabs
+          perl -pi -e 's/^\s+/	/' Makefile
           echo "Makefile generated with real tabs"
 
       # ------------------- Build IPA -------------------
