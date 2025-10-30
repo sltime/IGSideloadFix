@@ -50,7 +50,7 @@ jobs:
         run: git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
 
       # ------------------- THEOS-JAILED -------------------
-      - name: Clone theos-jailed
+      - name: Clone theos-jailed (opa334 fork – supports jailed + Hackogram_INJECT_DYLIBS)
         run: git clone --recursive --depth 1 https://github.com/opa334/theos-jailed.git "$THEOS_JAILED"
 
       - name: Install theos-jailed
@@ -92,11 +92,13 @@ jobs:
         run: |
           mkdir -p layout/Applications/Instagram.app/Frameworks
           cp -R tmp_ipa/Payload/Instagram.app/* layout/Applications/Instagram.app/
+          # Ensure Info.plist is present and readable
+          cp layout/Applications/Instagram.app/Info.plist layout/Applications/Instagram.app/Info.plist
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
 
-      # ------------------- Generate Makefile (theos-jailed ONLY) -------------------
-      - name: Generate Makefile (theos-jailed only)
+      # ------------------- Generate Makefile -------------------
+      - name: Generate Makefile (uses Hackogram_INJECT_DYLIBS as intended)
         run: |
           cat > Makefile <<'EOF'
           include $(THEOS)/makefiles/common.mk
@@ -107,31 +109,31 @@ jobs:
           Instagram_FILES = $(wildcard layout/Applications/Instagram.app/*.plist)
           Instagram_FRAMEWORKS = UIKit Foundation
 
-          ARCHS = arm64 arm64e
+          # Build ONLY arm64
+          ARCHS = arm64
           TARGET = iphone:clang:latest:15.0
 
           Instagram_INSTALL_PATH = /Applications
 
-          # Inject Rocket.dylib
-          Instagram_INJECT_DYLIBS = Rocket.dylib
+          # Use the custom variable as per original README
+          Hackogram_INJECT_DYLIBS = Rocket.dylib
 
-          # Standard Theos rules
           include $(THEOS_MAKE_PATH)/aggregate.mk
           include $(THEOS_MAKE_PATH)/application.mk
 
-          # Fix load path + re-sign binary
+          # Fix dylib load path and re-sign binary
           after-stage::
-          	$(ECHO_NOTHING)install_name_tool -change \
-          	@rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
-          	$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
-          	$(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+              $(ECHO_NOTHING)install_name_tool -change \
+                  @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
+                  $(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+              $(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
 
           FINALPACKAGE = 1
           EOF
 
-          # Replace leading spaces with real tabs
+          # Replace leading spaces with tabs
           perl -pi -e 's/^\s+/	/' Makefile
-          echo "Makefile generated with real tabs"
+          echo "Makefile generated (arm64, Hackogram_INJECT_DYLIBS)"
 
       # ------------------- Build IPA -------------------
       - name: Build IPA
