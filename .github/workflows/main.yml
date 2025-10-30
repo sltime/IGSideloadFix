@@ -95,41 +95,35 @@ jobs:
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
 
-      # ------------------- Generate Makefile (theos-jailed ONLY) -------------------
-      - name: Generate Makefile (theos-jailed only)
+      # ------------------- Generate Makefile (theos-jailed IPA injection) -------------------
+      - name: Generate Makefile (theos-jailed injection)
         run: |
           cat > Makefile <<'EOF'
           include $(THEOS)/makefiles/common.mk
 
-          APPLICATION_NAME = Instagram
-          Instagram_FRAMEWORKS = UIKit Foundation
+          THEOS_PACKAGE_SCHEME = jailed
+
+          IPA_NAME = Instagram
+          IPA_PATH = tmp_ipa/Payload/Instagram.app
+          IPA_INJECT_DYLIBS = Rocket.dylib
 
           ARCHS = arm64 arm64e
           TARGET = iphone:clang:latest:15.0
 
-          Instagram_INSTALL_PATH = /Applications
-          Instagram_IPA = Instagram.ipa
+          include $(THEOS_MAKE_PATH)/ipa.mk
 
-          # Inject Rocket.dylib
-          Instagram_INJECT_DYLIBS = Rocket.dylib
-
-          # Standard Theos rules
-          include $(THEOS_MAKE_PATH)/aggregate.mk
-          include $(THEOS_MAKE_PATH)/application.mk
-
-          # Fix load path + re-sign binary
           after-stage::
-              $(ECHO_NOTHING)install_name_tool -change \
-                @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
-                $(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
-              $(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+          	$(ECHO_NOTHING)install_name_tool -change \
+          		@rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
+          		$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+          	$(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
 
           FINALPACKAGE = 1
           EOF
 
           # Replace leading spaces with real tabs
           perl -pi -e 's/^\s+/	/' Makefile
-          echo "Makefile generated with real tabs"
+          echo "Makefile generated (jailed injection mode)"
 
       # ------------------- Build IPA -------------------
       - name: Build IPA
