@@ -51,7 +51,7 @@ jobs:
       - name: Clone Theos
         run: git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
 
-      # ------------------- THEOS-JAILED (original fork that knows Hackogram_INJECT_DYLIBS) -------------------
+      # ------------------- THEOS-JAILED (kabiroberai fork – supports Hackogram_INJECT_DYLIBS) -------------------
       - name: Clone theos-jailed (kabiroberai)
         run: git clone --recursive --depth 1 https://github.com/kabiroberai/theos-jailed.git "$THEOS_JAILED"
 
@@ -132,72 +132,48 @@ jobs:
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
           echo "Layout ready."
 
-      # ------------------- FILTER PLIST -------------------
-      - name: Generate Hackogram.plist (filter)
-        shell: bash
-        run: |
-          cat > Hackogram.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>Filter</key>
-              <dict>
-                  <key>Bundles</key>
-                  <array>
-                      <string>com.burbn.instagram</string>
-                  </array>
-              </dict>
-          </dict>
-          </plist>
-          EOF
-          echo "Generated Hackogram.plist"
-
-      # ------------------- DEBIAN CONTROL -------------------
-      - name: Generate DEBIAN/control
-        shell: bash
-        run: |
-          mkdir -p layout/DEBIAN
-          cat > layout/DEBIAN/control <<EOF
-          Package: com.yourname.igsideloadfix
-          Name: IGSideloadFix
-          Version: ${{ env.IG_VERSION }}-1
-          Architecture: iphoneos-arm
-          Description: Sideloaded Instagram with Rocket
-          Maintainer: GitHub Actions
-          Author: You
-          Section: Tweaks
-          Depends: firmware (>= 14.0)
-          EOF
-          echo "Generated DEBIAN/control"
-
-      # ------------------- MAKEFILE -------------------
-      - name: Generate Makefile (tweak + Hackogram_INJECT_DYLIBS)
+      # ------------------- MAKEFILE (jailed IPA build) -------------------
+      - name: Generate Makefile (jailed IPA mode)
         shell: bash
         run: |
           cat > Makefile <<'EOF'
-          ARCHS = arm64
-          TARGET = iphone:clang:latest:14.0
           include $(THEOS)/makefiles/common.mk
 
-          TWEAK_NAME = Hackogram
-          Hackogram_FILES = $(wildcard *.x)
-          Hackogram_FRAMEWORKS = UIKit Foundation
-          Hackogram_INJECT_DYLIBS = Rocket.dylib
-          Hackogram_INSTALL_PATH = /Applications/Instagram.app
+          THEOS_PACKAGE_SCHEME = jailed
 
-          # Theos-jailed will read the control file from layout/DEBIAN/control
-          include $(THEOS_MAKE_PATH)/tweak.mk
+          APPLICATION_NAME = Instagram
+          Instagram_FILES = $(wildcard layout/Applications/Instagram.app/*.plist)
+          Instagram_FRAMEWORKS = UIKit Foundation
+
+          ARCHS = arm64
+          TARGET = iphone:clang:latest:14.0
+
+          Instagram_INSTALL_PATH = /Applications
+
+          # Original author’s injection variable
+          Hackogram_INJECT_DYLIBS = Rocket.dylib
+
+          include $(THEOS_MAKE_PATH)/aggregate.mk
+          include $(THEOS_MAKE_PATH)/application.mk
+
+          # Fix load path + re-sign binary
+          after-stage::
+              $(ECHO_NOTHING)install_name_tool -change \
+                  @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
+                  $(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+              $(ECHO_NOTHING)ldid -S$(THEOS_STAGING_DIR)/Applications/Instagram.app/Instagram$(ECHO_END)
+
+          FINALPACKAGE = 1
           EOF
 
           perl -pi -e 's/^\s+/	/' Makefile
-          echo "Makefile generated"
+          echo "Makefile generated (jailed IPA mode)"
 
       # ------------------- BUILD IPA -------------------
       - name: Build IPA
         shell: bash
         run: |
-          echo "Building (sign_ipa=${{ inputs.sign_ipa }})..."
+          echo "Building IPA (sign_ipa=${{ inputs.sign_ipa }})..."
           if [ "${{ inputs.sign_ipa }}" = "false" ]; then
             make clean package FINALPACKAGE=1 CODESIGN_IPA=0
           else
@@ -208,13 +184,10 @@ jobs:
       - name: Rename IPA
         shell: bash
         run: |
-          # The tweak package puts the IPA in packages/ with the full package name
           IPA=$(find packages -name "*.ipa" -type f | head -n1)
           [ -z "$IPA" ] && { echo "Error: No .ipa found in packages/!"; exit 1; }
 
-          # Unsigned suffix
           SUFFIX=$( [ "${{ inputs.sign_ipa }}" = "false" ] && echo "-unsigned" || echo "" )
-
           NEW_NAME="IGSideloadFix-Instagram-${{ env.IG_VERSION }}$SUFFIX.ipa"
           mv "$IPA" "$NEW_NAME"
           echo "Built: $NEW_NAME"
