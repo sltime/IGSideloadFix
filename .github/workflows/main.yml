@@ -7,7 +7,7 @@ on:
         description: "Direct URL of decrypted Instagram IPA"
         required: true
       rocket_zip_url:
-        description: "Direct URL of Rocket.zip → extracts to Rocket/Rocket.dylib + Rocket.bundle"
+        description: "Direct URL of Rocket.zip → extracts to Rocket.dylib + Rocket.bundle"
         required: true
       sign_ipa:
         description: "Sign the IPA? (uncheck for unsigned)"
@@ -31,7 +31,6 @@ jobs:
       - name: Select Xcode 16.1
         run: sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
 
-      # ------------------- DEPENDENCIES -------------------
       - name: Install dependencies (skip if already installed)
         shell: bash
         run: |
@@ -48,11 +47,9 @@ jobs:
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
-      # ------------------- THEOS -------------------
       - name: Clone Theos
         run: git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
 
-      # ------------------- THEOS-JAILED -------------------
       - name: Clone theos-jailed
         run: git clone --recursive --depth 1 https://github.com/opa334/theos-jailed.git "$THEOS_JAILED"
 
@@ -61,7 +58,6 @@ jobs:
           cd "$THEOS_JAILED"
           ./install
 
-      # ------------------- INSTAGRAM IPA -------------------
       - name: Download & extract Instagram IPA
         shell: bash
         run: |
@@ -72,36 +68,84 @@ jobs:
           echo "IG_VERSION=$IG_VERSION" >> "$GITHUB_ENV"
           echo "Detected Instagram v$IG_VERSION"
 
-      # ------------------- ROCKET PAYLOAD -------------------
-      - name: Download & extract Rocket.zip
+      # ------------------- ROBUST ROCKET ZIP HANDLING -------------------
+      - name: Download & extract Rocket.zip (robust)
         shell: bash
         run: |
-          echo "Fetching Rocket.zip..."
-          wget -q "${{ inputs.rocket_zip_url }}" -O Rocket.zip
-          unzip -q Rocket.zip -d rocket_tmp
+          set -euo pipefail
+          echo "Preparing Rocket.zip download..."
 
-          if [ ! -f "rocket_tmp/Rocket.dylib" ]; then
-            echo "Error: Rocket.dylib not found in Rocket.zip"
+          # Use the workflow input (raw string)
+          ROCKET_INPUT="${{ inputs.rocket_zip_url }}"
+
+          # If it's a Dropbox share, ensure dl=1 (force direct download)
+          if echo "$ROCKET_INPUT" | grep -qi "dropbox.com"; then
+            # replace dl=0 with dl=1, or append ?dl=1 if no query part
+            if echo "$ROCKET_INPUT" | grep -q "dl="; then
+              ROCKET_URL="$(echo "$ROCKET_INPUT" | sed -E 's/dl=[01]/dl=1/g')"
+            else
+              ROCKET_URL="${ROCKET_INPUT}?dl=1"
+            fi
+          else
+            ROCKET_URL="$ROCKET_INPUT"
+          fi
+
+          echo "Using Rocket URL: ${ROCKET_URL}"
+          wget -q "$ROCKET_URL" -O rocket.zip
+
+          # Extract quietly
+          rm -rf rocket_tmp
+          mkdir -p rocket_tmp
+          unzip -q rocket.zip -d rocket_tmp
+
+          # Find Rocket.dylib (case-insensitive), try several fallbacks
+          ROCKET_DYLIB=$(find rocket_tmp -type f \( -iname 'Rocket.dylib' -o -iname '*rocket*.dylib' \) | head -n1 || true)
+          if [ -z "$ROCKET_DYLIB" ]; then
+            echo "Rocket.dylib not found with primary patterns; listing contents for debugging:"
+            find rocket_tmp -maxdepth 3 -type f -print | sed -n '1,200p'
+            echo "Error: Rocket.dylib not found inside the ZIP. Exiting."
             exit 1
           fi
 
-          mkdir -p Resources
-          cp rocket_tmp/Rocket.dylib ./Rocket.dylib
-          if [ -d rocket_tmp/Rocket.bundle ]; then
-            cp -R rocket_tmp/Rocket.bundle Resources/
+          echo "Found Rocket.dylib at: $ROCKET_DYLIB"
+
+          # Find Rocket.bundle (case-insensitive)
+          ROCKET_BUNDLE_DIR=$(find rocket_tmp -type d -iname 'Rocket.bundle' | head -n1 || true)
+          if [ -n "$ROCKET_BUNDLE_DIR" ]; then
+            echo "Found Rocket.bundle at: $ROCKET_BUNDLE_DIR"
           else
-            echo "No Rocket.bundle found — continuing without it."
+            echo "No Rocket.bundle found inside the ZIP (that's OK if you only provided dylib)."
           fi
+
+          # Copy to repo locations expected by the build
+          mkdir -p Resources
+          cp "$ROCKET_DYLIB" ./Rocket.dylib
+          echo "Copied Rocket.dylib -> ./Rocket.dylib"
+
+          if [ -n "$ROCKET_BUNDLE_DIR" ]; then
+            mkdir -p Resources
+            rm -rf Resources/Rocket.bundle
+            cp -R "$ROCKET_BUNDLE_DIR" Resources/Rocket.bundle
+            echo "Copied Rocket.bundle -> Resources/Rocket.bundle"
+          fi
+
+          # Clean temporary files
+          rm -rf rocket_tmp rocket.zip
+          echo "Rocket payload prepared."
 
       # ------------------- PATCH ROCKET -------------------
       - name: Patch Rocket.dylib (mov x0, #1 ; ret)
         shell: bash
         run: |
-          printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6' | \
-            dd of=Rocket.dylib bs=1 seek=$((0x5E30)) conv=notrunc 2>/dev/null
+          set -euo pipefail
+          if [ ! -f Rocket.dylib ]; then
+            echo "Rocket.dylib missing, cannot patch."
+            exit 1
+          fi
+          # patch bytes at offset (adjust offset if your offset differs)
+          printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6' | dd of=Rocket.dylib bs=1 seek=$((0x5E30)) conv=notrunc 2>/dev/null
           echo "Patched Rocket.dylib at offset 0x5E30"
 
-      # ------------------- THEOS LAYOUT -------------------
       - name: Prepare Theos layout
         shell: bash
         run: |
@@ -109,10 +153,9 @@ jobs:
           cp -R tmp_ipa/Payload/Instagram.app/* layout/Applications/Instagram.app/
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
-          echo "Theos layout prepared."
+          echo "Theos layout prepared (Info.plist copied)."
 
-      # ------------------- GENERATE MAKEFILE -------------------
-      - name: Generate Makefile (arm64 only)
+      - name: Generate Makefile (arm64-only tweak)
         shell: bash
         run: |
           cat > Makefile <<'EOF'
@@ -130,10 +173,10 @@ jobs:
           include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
 
+          # Convert leading spaces to tabs (Theos needs tabs in some places)
           perl -pi -e 's/^\s+/	/' Makefile
-          echo "Makefile generated with tabs, arch=arm64 only."
+          echo "Makefile generated (arch=arm64)."
 
-      # ------------------- BUILD -------------------
       - name: Build IPA
         shell: bash
         run: |
@@ -144,11 +187,10 @@ jobs:
             make clean package FINALPACKAGE=1
           fi
 
-      # ------------------- RENAME & UPLOAD -------------------
       - name: Rename IPA
         shell: bash
         run: |
-          IPA=$(find packages -name "*.ipa" | head -n1)
+          IPA=$(find packages -name "*.ipa" | head -n1 || true)
           if [ -z "$IPA" ]; then
             echo "Error: IPA not found!"
             exit 1
