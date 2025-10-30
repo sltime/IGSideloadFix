@@ -20,7 +20,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          brew install make ldid dpkg llvm unzip wget || true
+          brew install make ldid dpkg llvm unzip wget gh || true
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
@@ -39,28 +39,15 @@ jobs:
           IG_VERSION=$(grep -A 1 '<key>CFBundleShortVersionString</key>' tmp_ipa/Payload/Instagram.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')
           echo "IG_VERSION=${IG_VERSION}" >> "$GITHUB_ENV"
 
-- name: Download Rocket ZIP
-  run: wget -O rocket.zip --content-disposition "https://www.dropbox.com/s/YOUR_ZIP_LINK?dl=1"
+      - name: Download Rocket ZIP
+        run: wget -O rocket.zip --content-disposition "${{ github.event.inputs.rocket_deb_url }}"
 
-- name: Extract Rocket files
-  run: unzip -q rocket.zip -d rocket_tmp
-
-- name: Copy Rocket files to repo
-  run: |
-    mkdir -p ./Resources/Rocket.bundle
-    cp rocket_tmp/Rocket.dylib ./         # copy dylib to repo root for Makefile
-    cp -R rocket_tmp/Rocket.bundle/* ./Resources/Rocket.bundle/
-
-- name: Build Package
-  run: |
-    sed -i '' "s/^TARGET.*$/TARGET := iphone:clang:${{ inputs.sdk_version }}:${{ inputs.target_version }}/" Makefile
-    make package FINALPACKAGE=1 CODESIGN_IPA=0
-  env:
-    THEOS: ${{ github.workspace }}/theos
+      - name: Extract Rocket files
+        run: unzip -q rocket.zip -d rocket_tmp
 
       - name: Patch Rocket dylib
         run: |
-          llvm-objcopy --update-section __TEXT,__text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') Rocket.dylib Rocket_patched.dylib
+          llvm-objcopy --update-section __TEXT,__text=<(printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6') rocket_tmp/Rocket.dylib Rocket_patched.dylib
           mv Rocket_patched.dylib Rocket.dylib
 
       - name: Extract Rocket.bundle resources
@@ -75,12 +62,9 @@ jobs:
 
       - name: Force arm64/arm64e and clean previous builds
         run: |
-          # Update Makefile
           sed -i '' 's/^ARCHS.*/ARCHS = arm64 arm64e/' Makefile
           sed -i '' 's/^TARGET.*/TARGET = iphone:clang:16.5:15.0/' Makefile
           sed -i '' 's/^Hackogram_INJECT_DYLIBS.*/Hackogram_INJECT_DYLIBS = Rocket.dylib/' Makefile
-
-          # Clean old builds
           make clean
           rm -rf .theos/obj/armv7
         env:
@@ -96,3 +80,20 @@ jobs:
         with:
           name: IGSideloadFix-Instagram-${{ env.IG_VERSION }}
           path: packages/*.ipa
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IG_VERSION: ${{ env.IG_VERSION }}
+        run: |
+          RELEASE_TAG="v${IG_VERSION}-$(date +'%Y%m%d')"
+          RELEASE_NAME="IGSideloadFix v${IG_VERSION} ($(date +'%Y-%m-%d'))"
+          IPA_PATH=$(find packages -name "*.ipa" | head -n1)
+
+          echo "Creating release ${RELEASE_NAME}..."
+          gh release create "$RELEASE_TAG" "$IPA_PATH" \
+            --title "$RELEASE_NAME" \
+            --notes "Automatically built from workflow dispatch.
+- Instagram version: ${IG_VERSION}
+- Includes Rocket dylib patch for arm64/arm64e
+- Built with Theos on macOS-latest"
