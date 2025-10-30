@@ -70,34 +70,72 @@ jobs:
           echo "Detected Instagram v$IG_VERSION"
 
       # --------------------------------------------------------------
+      # ROBUST ROCKET ZIP HANDLING (fixed & complete)
       - name: Download & extract Rocket.zip (robust)
         shell: bash
         run: |
           set -euo pipefail
+
           INPUT="${{ inputs.rocket_zip_url }}"
 
-          # Dropbox direct-download fix
+          # ---- Dropbox direct-download fix ----
           if echo "$INPUT" | grep -qi "dropbox.com"; then
             if echo "$INPUT" | grep -q "dl="; then
               URL="$(echo "$INPUT" | sed -E 's/dl=[01]/dl=1/g')"
             else
-              URL="${INPUT}?dl= Find Rocket.dylib and Rocket.bundle
-          ROCKET_DYLIB=$(find rocket_tmp -type f -iname 'Rocket.dylib' | head -n1)
-          [ -z "$ROCKET_DYLIB" ] && { echo "Rocket.dylib not found"; exit 1; }
+              URL="${INPUT}?dl=1"
+            fi
+          else
+            URL="$INPUT"
+          fi
 
+          echo "Downloading Rocket from: $URL"
+          wget -q "$URL" -O rocket.zip
+
+          # ---- Extract to a temporary folder ----
+          rm -rf rocket_tmp
+          mkdir -p rocket_tmp
+          unzip -q rocket.zip -d rocket_tmp
+
+          # ---- Find Rocket.dylib (case-insensitive) ----
+          ROCKET_DYLIB=$(find rocket_tmp -type f \( -iname 'Rocket.dylib' -o -iname '*rocket*.dylib' \) | head -n1)
+          if [ -z "$ROCKET_DYLIB" ]; then
+            echo "Error: Rocket.dylib not found in ZIP. Contents:"
+            find rocket_tmp -type f | head -20
+            exit 1
+          fi
+          echo "Found Rocket.dylib: $ROCKET_DYLIB"
+
+          # ---- Find Rocket.bundle (optional) ----
           ROCKET_BUNDLE=$(find rocket_tmp -type d -iname 'Rocket.bundle' | head -n1)
+          if [ -n "$ROCKET_BUNDLE" ]; then
+            echo "Found Rocket.bundle: $ROCKET_BUNDLE"
+          else
+            echo "No Rocket.bundle found (optional)."
+          fi
 
+          # ---- Copy to repo locations ----
           cp "$ROCKET_DYLIB" ./Rocket.dylib
-          [ -n "$ROCKET_BUNDLE" ] && cp -R "$ROCKET_BUNDLE" ./Resources/Rocket.bundle
+          echo "Copied Rocket.dylib to root"
 
+          if [ -n "$ROCKET_BUNDLE" ]; then
+            mkdir -p Resources
+            rm -rf Resources/Rocket.bundle
+            cp -R "$ROCKET_BUNDLE" Resources/Rocket.bundle
+            echo "Copied Rocket.bundle to Resources/"
+          fi
+
+          # ---- Cleanup ----
           rm -rf rocket_tmp rocket.zip
+          echo "Rocket payload ready."
 
       # --------------------------------------------------------------
       - name: Patch Rocket.dylib (mov x0, #1 ; ret)
         shell: bash
         run: |
+          set -euo pipefail
           printf '\x20\x00\x80\xd2\xc0\x03\x5f\xd6' | dd of=Rocket.dylib bs=1 seek=$((0x5E30)) conv=notrunc 2>/dev/null
-          echo "Patched at 0x5E30"
+          echo "Patched Rocket.dylib at offset 0x5E30"
 
       # --------------------------------------------------------------
       - name: Prepare Theos layout
@@ -107,6 +145,7 @@ jobs:
           cp -R tmp_ipa/Payload/Instagram.app/* layout/Applications/Instagram.app/
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
+          echo "Theos layout ready"
 
       # --------------------------------------------------------------
       - name: Generate Hackogram.plist (filter)
@@ -127,6 +166,7 @@ jobs:
           </dict>
           </plist>
           EOF
+          echo "Generated Hackogram.plist"
 
       # --------------------------------------------------------------
       - name: Generate DEBIAN/control
@@ -144,6 +184,7 @@ jobs:
           Section: Tweaks
           Depends: firmware (>= 14.0)
           EOF
+          echo "Generated DEBIAN/control"
 
       # --------------------------------------------------------------
       - name: Generate Makefile (tweak + jailed injection)
@@ -166,6 +207,7 @@ jobs:
           EOF
 
           perl -pi -e 's/^\s+/	/' Makefile
+          echo "Makefile generated"
 
       # --------------------------------------------------------------
       - name: Build tweak
@@ -184,7 +226,7 @@ jobs:
         shell: bash
         run: |
           IPA=$(find packages -name "*.ipa" | head -n1)
-          [ -z "$IPA" ] && { echo "IPA not found in packages/!"; ls -R packages/; exit 1; }
+          [ -z "$IPA" ] && { echo "IPA not found!"; ls -R packages/; exit 1; }
 
           SUFFIX=$( [ "${{ inputs.sign_ipa }}" = "false" ] && echo "-unsigned" || echo "" )
           NEW_NAME="IGSideloadFix-Instagram-${{ env.IG_VERSION }}$SUFFIX.ipa"
