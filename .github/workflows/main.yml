@@ -142,7 +142,8 @@ jobs:
           THEOS_PACKAGE_SCHEME = jailed
 
           APPLICATION_NAME = Instagram
-          Instagram_FILES = $(wildcard layout/Applications/Instagram.app/*.plist)
+          # DO NOT include Info.plist — it's a resource, not source
+          Instagram_FILES = 
           Instagram_FRAMEWORKS = UIKit Foundation
 
           ARCHS = arm64
