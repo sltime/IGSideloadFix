@@ -90,15 +90,26 @@ jobs:
       # ------------------- Theos layout -------------------
       - name: Prepare Theos layout
         run: |
+          # 1. Create the directory structure
           mkdir -p layout/Applications/Instagram.app/Frameworks
+
+          # 2. Copy the *entire* extracted app (including Info.plist)
           cp -R tmp_ipa/Payload/Instagram.app/* layout/Applications/Instagram.app/
-          # Ensure Info.plist is present and readable
-          cp layout/Applications/Instagram.app/Info.plist layout/Applications/Instagram.app/Info.plist
+
+          # 3. Copy the patched dylib into Frameworks/
           cp Rocket.dylib layout/Applications/Instagram.app/Frameworks/
+
+          # 4. Copy the bundle (if present)
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
 
+          # 5. (Optional) sanity-check that Info.plist really exists
+          if [ ! -f layout/Applications/Instagram.app/Info.plist ]; then
+            echo "Error: Info.plist missing after copy!"
+            exit 1
+          fi
+
       # ------------------- Generate Makefile -------------------
-      - name: Generate Makefile (uses Hackogram_INJECT_DYLIBS as intended)
+      - name: Generate Makefile (uses Hackogram_INJECT_DYLIBS)
         run: |
           cat > Makefile <<'EOF'
           include $(THEOS)/makefiles/common.mk
@@ -115,13 +126,13 @@ jobs:
 
           Instagram_INSTALL_PATH = /Applications
 
-          # Use the custom variable as per original README
+          # <-- Original author’s custom variable (required!)
           Hackogram_INJECT_DYLIBS = Rocket.dylib
 
           include $(THEOS_MAKE_PATH)/aggregate.mk
           include $(THEOS_MAKE_PATH)/application.mk
 
-          # Fix dylib load path and re-sign binary
+          # Fix dylib load path + re-sign binary
           after-stage::
               $(ECHO_NOTHING)install_name_tool -change \
                   @rpath/Rocket.dylib @executable_path/../Frameworks/Rocket.dylib \
@@ -131,7 +142,7 @@ jobs:
           FINALPACKAGE = 1
           EOF
 
-          # Replace leading spaces with tabs
+          # Convert leading spaces to real tabs
           perl -pi -e 's/^\s+/	/' Makefile
           echo "Makefile generated (arm64, Hackogram_INJECT_DYLIBS)"
 
