@@ -89,15 +89,25 @@ jobs:
           RELEASE_TAG="v${IG_VERSION}-$(date +'%Y%m%d')"
           RELEASE_NAME="IGSideloadFix v${IG_VERSION} ($(date +'%Y-%m-%d'))"
           IPA_PATH=$(find packages -name "*.ipa" | head -n1)
+
           echo "Creating release ${RELEASE_NAME}..."
-          gh release create "$RELEASE_TAG" "$IPA_PATH" \
-            --title "$RELEASE_NAME" \
-            --notes "$(cat <<'EOF'
+
+          # If release already exists, delete it first to allow overwrite
+          if gh release view "$RELEASE_TAG" &>/dev/null; then
+            echo "Existing release found. Deleting old release..."
+            gh release delete "$RELEASE_TAG" --yes
+          fi
+
+          # Write release notes safely to a file
+          cat > release_notes.txt <<EOF
 Automatically built from workflow dispatch.
 
 - Instagram version: ${IG_VERSION}
 - Includes Rocket dylib patch for arm64/arm64e
 - Built with Theos on macOS-latest
 EOF
-)"
 
+          # Create GitHub release
+          gh release create "$RELEASE_TAG" "$IPA_PATH" \
+            --title "$RELEASE_NAME" \
+            --notes-file release_notes.txt
