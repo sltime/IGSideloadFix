@@ -50,8 +50,8 @@ jobs:
       - name: Clone Theos
         run: git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
 
-      - name: Clone theos-jailed
-        run: git clone --recursive --depth 1 https://github.com/opa334/theos-jailed.git "$THEOS_JAILED"
+      - name: Clone theos-jailed (kabiroberai fork for Hackogram_INJECT_DYLIBS support)
+        run: git clone --recursive --depth 1 https://github.com/kabiroberai/theos-jailed.git "$THEOS_JAILED"
 
       - name: Install theos-jailed
         run: |
@@ -155,7 +155,27 @@ jobs:
           [ -d Resources/Rocket.bundle ] && cp -R Resources/Rocket.bundle layout/Applications/Instagram.app/ || true
           echo "Theos layout prepared (Info.plist copied)."
 
-      - name: Generate Makefile (arm64-only tweak)
+      - name: Generate Hackogram.plist (required for tweak filter)
+        shell: bash
+        run: |
+          cat > Hackogram.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Filter</key>
+              <dict>
+                  <key>Bundles</key>
+                  <array>
+                      <string>com.burbn.instagram</string>
+                  </array>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+          echo "Generated Hackogram.plist for Instagram bundle filter."
+
+      - name: Generate Makefile (arm64-only tweak with plist support)
         shell: bash
         run: |
           cat > Makefile <<'EOF'
