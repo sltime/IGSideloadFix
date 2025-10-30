@@ -140,10 +140,13 @@ jobs:
           include $(THEOS)/makefiles/common.mk
 
           THEOS_PACKAGE_SCHEME = jailed
+          THEOS_PLATFORM_DEB_COMPRESSION = none
 
           APPLICATION_NAME = Instagram
-          # DO NOT include Info.plist — it's a resource, not source
-          Instagram_FILES = 
+
+          # Explicitly tell Theos which binary to link
+          Instagram_BINARY = Instagram
+
           Instagram_FRAMEWORKS = UIKit Foundation
 
           ARCHS = arm64
