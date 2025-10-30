@@ -7,7 +7,7 @@ on:
         description: "Direct URL of decrypted Instagram IPA"
         required: true
       rocket_zip_url:
-        description: "Direct URL of Rocket.zip → extracts to Rocket.dylib + Rocket.bundle"
+        description: "Direct URL of Rocket.zip to extracts to Rocket.dylib + Rocket.bundle"
         required: true
       sign_ipa:
         description: "Sign the IPA? (uncheck for unsigned)"
@@ -76,7 +76,7 @@ jobs:
 
           ROCKET_INPUT="${{ inputs.rocket_zip_url }}"
 
-          # Fix Dropbox: force dl=1
+          # ---- FIX FOR LINE 137 ----
           if echo "$ROCKET_INPUT" | grep -qi "dropbox"; then
             if echo "$ROCKET_INPUT" | grep -q "dl="; then
               ROCKET_URL="$(echo "$ROCKET_INPUT" | sed -E 's/dl=[01]/dl=1/g')"
@@ -86,6 +86,7 @@ jobs:
           else
             ROCKET_URL="$ROCKET_INPUT"
           fi
+          # -------------------------
 
           echo "Downloading Rocket from: $ROCKET_URL"
           wget -q "$ROCKET_URL" -O rocket.zip
@@ -161,7 +162,6 @@ after-stage::
 FINALPACKAGE = 1
 EOF
 
-          # Preserve tabs in after-stage:: block
           awk '
             /^after-stage::$/ { print; in_block=1; next }
             in_block && /^$/ { in_block=0 }
